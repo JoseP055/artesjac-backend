@@ -1,0 +1,36 @@
+{
+  "name": "artesjac-backend",
+  "version": "1.0.0",
+  "description": "This repository contains the backend API for ArtesJAC, a web-based marketplace for local handmade art and crafts. Built using Node.js, Express, and MongoDB, this backend provides all necessary services for user authentication, product management, and cart simulation.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JoseP055/artesjac-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/JoseP055/artesjac-backend/issues"
+  },
+  "homepage": "https://github.com/JoseP055/artesjac-backend#readme",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.17.1",
+    "morgan": "^1.10.1",
+    "zod": "^4.0.17"
+  },
+  "devDependencies": {
+    "eslint": "^9.33.0",
+    "nodemon": "^3.1.10"
+  }
+}
