@@ -20,3 +20,7 @@ export const requireRole = (roles = []) => (req, res, next) => {
     }
     next();
 };
+
+// Azúcar sintáctica para rutas de productos
+export const requireSellerOrAdmin = (req, res, next) =>
+    requireRole(["seller", "admin"])(req, res, next);
