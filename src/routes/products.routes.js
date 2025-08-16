@@ -1,10 +1,12 @@
 import { Router } from "express";
+import mongoose from "mongoose";
 import Product from "../models/Product.js";
-import { requireAuth, requireRole } from "../middlewares/requireAuth.js";
+import { requireAuth, requireSellerOrAdmin } from "../middlewares/requireAuth.js";
 
 const router = Router();
+const { isValidObjectId, Types } = mongoose;
 
-/** Util: generar slug limpio */
+// Utils
 const toSlug = (str) =>
   String(str || "")
     .toLowerCase()
@@ -12,7 +14,6 @@ const toSlug = (str) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
 
-/** Helpers de saneo */
 const toNum = (v, fallback = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
@@ -23,18 +24,16 @@ const cleanImages = (arr) =>
     .filter(i => i.url);
 const splitTags = (s) =>
   (Array.isArray(s) ? s : String(s || "").split(","))
-    .map(t => String(t).trim())
-    .filter(Boolean);
+    .map(t => String(t).trim()).filter(Boolean);
 
 /** GET /api/products
- *  Query: q, category, featured=true, minPrice, maxPrice, sort, page, limit, active
+ * Query: q, category, featured=true, minPrice, maxPrice, sort, page, limit, active
  */
 router.get("/", async (req, res) => {
   try {
     const { q, category, featured, minPrice, maxPrice, sort = "-createdAt", page = 1, limit = 12, active } = req.query;
     const filter = {};
 
-    // Por defecto solo activos, a menos que pidas ?active=all o false
     if (active !== "all") filter.isActive = active === "false" ? false : true;
     if (q) filter.$text = { $search: q };
     if (category) filter.category = String(category).toLowerCase();
@@ -52,9 +51,15 @@ router.get("/", async (req, res) => {
       Product.countDocuments(filter),
     ]);
 
-    res.json({ ok: true, page: Number(page), limit: Number(limit), total, items });
+    return res.json({ ok: true, page: Number(page), limit: Number(limit), total, items });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error("❌ PRODUCTS LIST ERROR:", {
+      name: e?.name,
+      code: e?.code,
+      message: e?.message,
+      errors: e?.errors,
+    });
+    return res.status(400).json({ ok: false, error: e?.message || "Error listando productos" });
   }
 });
 
@@ -63,53 +68,70 @@ router.get("/:slug", async (req, res) => {
   try {
     const product = await Product.findOne({ slug: req.params.slug });
     if (!product) return res.status(404).json({ ok: false, error: "Producto no encontrado" });
-    res.json({ ok: true, product });
+    return res.json({ ok: true, product });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error("❌ PRODUCT GET ERROR:", {
+      name: e?.name,
+      code: e?.code,
+      message: e?.message,
+      errors: e?.errors,
+    });
+    return res.status(400).json({ ok: false, error: e?.message || "Error obteniendo producto" });
   }
 });
 
-/** POST /api/products — admin y seller */
-router.post("/", requireAuth, requireRole(["admin", "seller"]), async (req, res) => {
+/** POST /api/products — seller | admin */
+router.post("/", requireAuth, requireSellerOrAdmin, async (req, res) => {
   try {
-    const body = req.body || {};
+    const b = req.body || {};
+    const rawArtist = req.user.role === "seller" ? req.user.id : (b.artistId || req.user.id);
+    if (!isValidObjectId(rawArtist)) {
+      return res.status(400).json({ ok: false, error: "artistId inválido" });
+    }
+
     const payload = {
-      name: String(body.name || "").trim(),
-      description: String(body.description || ""),
-      price: toNum(body.price),
-      stock: toNum(body.stock),
-      images: cleanImages(body.images),
-      category: String(body.category || "").toLowerCase().trim(),
-      categoryName: String(body.categoryName || body.category || ""),
-      tags: splitTags(body.tags),
-      // Si es seller, forzamos su propio artistId
-      artistId: req.user.role === "seller" ? req.user.id : (body.artistId || req.user.id),
-      isActive: Boolean(body.isActive ?? true),
-      isFeatured: Boolean(body.isFeatured ?? false),
-      slug: body.slug ? toSlug(body.slug) : toSlug(body.name),
+      name: String(b.name || "").trim(),
+      description: String(b.description || ""),
+      price: toNum(b.price),
+      stock: toNum(b.stock),
+      images: cleanImages(b.images),
+      category: String(b.category || "").toLowerCase().trim(),
+      categoryName: String(b.categoryName || b.category || ""),
+      tags: splitTags(b.tags),
+      artistId: new Types.ObjectId(rawArtist),
+      isActive: Boolean(b.isActive ?? true),
+      isFeatured: Boolean(b.isFeatured ?? false),
+      slug: b.slug ? toSlug(b.slug) : toSlug(b.name),
     };
 
-    // Requeridos mínimos
-    if (!payload.name || !payload.category || payload.price == null || payload.stock == null || !payload.artistId) {
-      return res.status(400).json({ ok: false, error: "name, price, stock, category y artistId son requeridos" });
+    if (!payload.name || !payload.category || payload.price == null || payload.stock == null) {
+      return res.status(400).json({ ok: false, error: "name, price, stock y category son requeridos" });
     }
 
     const exists = await Product.findOne({ slug: payload.slug });
     if (exists) return res.status(409).json({ ok: false, error: "Slug ya existe" });
 
     const product = await Product.create(payload);
-    res.status(201).json({ ok: true, product });
+    return res.status(201).json({ ok: true, product });
   } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
+    console.error("❌ PRODUCT CREATE VALIDATION:", {
+      name: e?.name,
+      code: e?.code,
+      message: e?.message,
+      errors: e?.errors,
+      keyValue: e?.keyValue,
+      path: e?.path,
+      value: e?.value,
+    });
+    if (e?.code === 11000) return res.status(409).json({ ok: false, error: "Duplicado (slug/email único)" });
+    return res.status(400).json({ ok: false, error: e?.message || "Document failed validation" });
   }
 });
 
-/** PUT /api/products/:id — admin y seller (seller solo sus productos) */
-router.put("/:id", requireAuth, requireRole(["admin", "seller"]), async (req, res) => {
+/** PUT /api/products/:id — seller | admin (seller solo sus productos) */
+router.put("/:id", requireAuth, requireSellerOrAdmin, async (req, res) => {
   try {
     const updates = { ...req.body };
-
-    // Normalizar campos editables
     if (updates.name && !updates.slug) updates.slug = toSlug(updates.name);
     if (updates.slug) updates.slug = toSlug(updates.slug);
     if (updates.price !== undefined) updates.price = toNum(updates.price);
@@ -117,36 +139,53 @@ router.put("/:id", requireAuth, requireRole(["admin", "seller"]), async (req, re
     if (updates.category) updates.category = String(updates.category).toLowerCase().trim();
     if (updates.images) updates.images = cleanImages(updates.images);
     if (updates.tags) updates.tags = splitTags(updates.tags);
-
-    // Filtro de ownership para seller
-    const findFilter = { _id: req.params.id };
-    if (req.user.role === "seller") {
-      findFilter.artistId = req.user.id;
+    if (updates.artistId) {
+      if (!isValidObjectId(updates.artistId)) {
+        return res.status(400).json({ ok: false, error: "artistId inválido" });
+      }
+      updates.artistId = new Types.ObjectId(updates.artistId);
     }
+
+    const findFilter = { _id: req.params.id };
+    if (req.user.role === "seller") findFilter.artistId = req.user.id;
 
     const product = await Product.findOneAndUpdate(findFilter, updates, { new: true, runValidators: true });
     if (!product) return res.status(404).json({ ok: false, error: "Producto no encontrado o sin permiso" });
 
-    res.json({ ok: true, product });
+    return res.json({ ok: true, product });
   } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
+    console.error("❌ PRODUCT UPDATE VALIDATION:", {
+      name: e?.name,
+      code: e?.code,
+      message: e?.message,
+      errors: e?.errors,
+      keyValue: e?.keyValue,
+      path: e?.path,
+      value: e?.value,
+    });
+    if (e?.code === 11000) return res.status(409).json({ ok: false, error: "Duplicado (slug/email único)" });
+    return res.status(400).json({ ok: false, error: e?.message || "Document failed validation" });
   }
 });
 
-/** DELETE /api/products/:id — admin y seller (seller solo sus productos) */
-router.delete("/:id", requireAuth, requireRole(["admin", "seller"]), async (req, res) => {
+/** DELETE /api/products/:id — seller | admin (seller solo sus productos) */
+router.delete("/:id", requireAuth, requireSellerOrAdmin, async (req, res) => {
   try {
     const findFilter = { _id: req.params.id };
-    if (req.user.role === "seller") {
-      findFilter.artistId = req.user.id;
-    }
+    if (req.user.role === "seller") findFilter.artistId = req.user.id;
 
     const del = await Product.findOneAndDelete(findFilter);
     if (!del) return res.status(404).json({ ok: false, error: "Producto no encontrado o sin permiso" });
 
-    res.json({ ok: true, msg: "Eliminado" });
+    return res.json({ ok: true, msg: "Eliminado" });
   } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
+    console.error("❌ PRODUCT DELETE ERROR:", {
+      name: e?.name,
+      code: e?.code,
+      message: e?.message,
+      errors: e?.errors,
+    });
+    return res.status(400).json({ ok: false, error: e?.message || "Error eliminando producto" });
   }
 });
 
