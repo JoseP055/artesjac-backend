@@ -38,7 +38,7 @@ const userSchema = new mongoose.Schema(
         // 👇 ROLES estandarizados
         role: { type: String, enum: ["buyer", "seller", "admin"], default: "buyer" },
 
-        address: { type: addressSchema, default: {} },
+        address: { type: addressSchema, default: undefined },
         addresses: { type: [addressSchema], default: [] },
 
         emailVerified: { type: Boolean, default: true },
