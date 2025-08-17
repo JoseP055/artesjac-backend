@@ -12,6 +12,48 @@ const sign = (user) =>
     { expiresIn: "2h" }
   );
 
+// --- Helpers ---
+const roleMap = {
+  USER: "buyer", user: "buyer", BUYER: "buyer", buyer: "buyer",
+  SELLER: "seller", seller: "seller",
+  ADMIN: "admin", admin: "admin",
+};
+
+/** Normaliza lo que venga como "address" desde el front.
+ *  - string -> { line1: "<string>" }
+ *  - objeto  -> deja solo campos válidos (trim)
+ *  - vacío   -> undefined
+ */
+function normalizeAddress(input) {
+  if (!input) return undefined;
+
+  if (typeof input === "string") {
+    const v = input.trim();
+    return v ? { line1: v, isDefault: true } : undefined;
+  }
+
+  if (typeof input === "object") {
+    const addr = {
+      line1: input.line1?.trim() || undefined,
+      line2: input.line2?.trim() || undefined,
+      city: input.city?.trim() || undefined,
+      state: input.state?.trim() || undefined,
+      country: input.country?.trim() || undefined,
+      zip: input.zip?.trim() || undefined,
+      isDefault: input.isDefault === true,
+    };
+    // Si todos los campos están vacíos/undefined, no guardamos objeto vacío
+    const hasAny =
+      addr.line1 || addr.line2 || addr.city || addr.state || addr.country || addr.zip;
+    if (!hasAny) return undefined;
+    if (addr.isDefault !== true) delete addr.isDefault;
+    return addr;
+  }
+
+  // Cualquier otro tipo: ignorar para no romper el cast de Mongoose
+  return undefined;
+}
+
 /** POST /api/auth/register */
 router.post("/register", async (req, res) => {
   try {
@@ -29,16 +71,21 @@ router.post("/register", async (req, res) => {
     const exists = await User.findOne({ email: emailNorm });
     if (exists) return res.status(409).json({ ok: false, error: "Email ya registrado" });
 
-    // Solo permitimos buyer | seller desde el front (jamás admin)
-    const safeRole = role === "seller" ? "seller" : "buyer";
+    // Solo permitimos buyer | seller desde el front (jamás admin por esta ruta)
+    const mappedRole = roleMap[role] || "buyer";
+    const safeRole = mappedRole === "admin" ? "buyer" : mappedRole;
+
+    // Address normalizado (evita "Cast to Embedded failed...")
+    const mainAddress = normalizeAddress(address);
+    const addresses = mainAddress ? [{ ...mainAddress, isDefault: true }] : [];
 
     const user = await User.create({
       name: String(name).trim(),
       email: emailNorm,
-      password, // se hashea en pre("save")
+      password, // se hashea en pre("save") del modelo
       role: safeRole,
-      address: address || {},
-      addresses: address ? [{ ...address, isDefault: true }] : [],
+      address: mainAddress,      // undefined si no hay datos válidos
+      addresses,                 // [] si no hay address
       emailVerified: true,
       isActive: true,
       preferences: {},
@@ -51,10 +98,11 @@ router.post("/register", async (req, res) => {
       ok: true,
       token,
       user: {
-        _id: user._id,
+        id: user._id,                 // <- id "plano" para el front
+        _id: user._id,                // (por compatibilidad si lo usabas)
         name: user.name,
         email: user.email,
-        role: user.role,
+        role: user.role,              // "buyer" | "seller"
         address: user.address,
         addresses: user.addresses,
         emailVerified: user.emailVerified,
@@ -103,8 +151,29 @@ router.post("/login", async (req, res) => {
     await user.save();
 
     const token = sign(user);
+    // Consultamos sin password (por select:false + toJSON)
     const safe = await User.findById(user._id);
-    return res.json({ ok: true, token, user: safe });
+
+    return res.json({
+      ok: true,
+      token,
+      user: {
+        id: safe._id,
+        _id: safe._id,
+        name: safe.name,
+        email: safe.email,
+        role: safe.role,
+        address: safe.address,
+        addresses: safe.addresses,
+        emailVerified: safe.emailVerified,
+        isActive: safe.isActive,
+        preferences: safe.preferences,
+        profile: safe.profile,
+        stats: safe.stats,
+        createdAt: safe.createdAt,
+        updatedAt: safe.updatedAt,
+      },
+    });
   } catch (e) {
     console.error("❌ LOGIN ERROR:", {
       name: e?.name,
@@ -119,6 +188,37 @@ router.post("/login", async (req, res) => {
 /** GET /api/auth/whoami */
 router.get("/whoami", requireAuth, (req, res) => {
   return res.json({ ok: true, user: req.user });
+});
+
+/** GET /api/auth/me (alias para el front) */
+router.get("/me", requireAuth, async (req, res) => {
+  try {
+    // Opcional: refrescar datos desde DB por si cambiaron
+    const dbUser = await User.findById(req.user.sub || req.user.id || req.user._id);
+    if (!dbUser || !dbUser.isActive) return res.status(401).json({ ok: false, error: "No autorizado" });
+
+    return res.json({
+      ok: true,
+      user: {
+        id: dbUser._id,
+        _id: dbUser._id,
+        name: dbUser.name,
+        email: dbUser.email,
+        role: dbUser.role,
+        address: dbUser.address,
+        addresses: dbUser.addresses,
+        emailVerified: dbUser.emailVerified,
+        isActive: dbUser.isActive,
+        preferences: dbUser.preferences,
+        profile: dbUser.profile,
+        stats: dbUser.stats,
+        createdAt: dbUser.createdAt,
+        updatedAt: dbUser.updatedAt,
+      },
+    });
+  } catch {
+    return res.status(401).json({ ok: false, error: "Token inválido/expirado" });
+  }
 });
 
 export default router;
