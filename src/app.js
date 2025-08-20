@@ -6,13 +6,14 @@ import compression from "compression";
 import morgan from "morgan";
 
 // Rutas
-import productRoutes from "./routes/products.routes.js";
 import authRoutes from "./routes/auth.routes.js";
+import productRoutes from "./routes/products.routes.js";
+import storeProfileRoutes from "./routes/storeProfile.routes.js"; // 👈 asegurate que el archivo exista
 
 const app = express(); // ✅ crear la app ANTES de usar app.use
 
 // Middlewares base
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: false })); // en dev, para que no bloquee imágenes/static
 app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:3000" }));
 app.use(compression());
 app.use(express.json());
@@ -27,6 +28,7 @@ app.get("/api/health", (_req, res) =>
 // 🔗 Rutas de negocio (montar solo una vez)
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
+app.use("/api/store-profile", storeProfileRoutes); 
 
 // 404 controlado (AL FINAL)
 app.use((req, res) => {
