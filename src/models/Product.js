@@ -1,48 +1,41 @@
+// src/models/Product.js
 import mongoose from "mongoose";
 
-const imageSchema = new mongoose.Schema(
-    { url: { type: String, required: true }, alt: { type: String, default: "" } },
-    { _id: false }
-);
-
-const ratingSchema = new mongoose.Schema(
-    { average: { type: Number, default: 0, min: 0, max: 5 }, count: { type: Number, default: 0, min: 0 } },
-    { _id: false }
-);
-
-const reviewSchema = new mongoose.Schema(
+const ProductSchema = new mongoose.Schema(
     {
-        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-        comment: { type: String, default: "" },
-        rating: { type: Number, min: 1, max: 5, required: true },
-        createdAt: { type: Date, default: Date.now }
-    },
-    { _id: true }
-);
-
-const productSchema = new mongoose.Schema(
-    {
-        name: { type: String, required: true, trim: true },
-        description: { type: String, default: "" },
+        title: { type: String, required: true, trim: true, maxlength: 140 },
+        slug: { type: String, unique: true, index: true },
+        description: { type: String, default: "", maxlength: 2000 },
         price: { type: Number, required: true, min: 0 },
-        stock: { type: Number, required: true, min: 0 },
-        images: { type: [imageSchema], default: [] },
-        category: { type: String, required: true, lowercase: true, trim: true },
-        categoryName: { type: String, default: "" },
-        tags: { type: [String], default: [] },
-        artistId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-        rating: { type: ratingSchema, default: () => ({}) },
-        reviews: { type: [reviewSchema], default: [] },
-        isActive: { type: Boolean, default: true },
-        isFeatured: { type: Boolean, default: false },
-        slug: { type: String, required: true, unique: true, lowercase: true, trim: true }
+        stock: { type: Number, default: 0, min: 0 },
+        images: [{ type: String, trim: true }],              // URLs (pueden ser locales por ahora)
+        category: { type: String, index: true, trim: true }, // opcional: luego lo podemos normalizar a otra colección
+        tags: [{ type: String, trim: true }],
+        status: { type: String, enum: ["draft", "active", "archived"], default: "active", index: true },
+
+        // Propietario del producto (vendedor)
+        vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true }
     },
     { timestamps: true }
 );
 
-productSchema.index({ slug: 1 }, { unique: true });
-productSchema.index({ category: 1, isActive: 1 });
-productSchema.index({ isFeatured: 1, isActive: 1 });
-productSchema.index({ name: "text", description: "text", tags: "text" });
+// Utilidad simple para generar slug
+function toSlug(str) {
+    return String(str || "")
+        .toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)+/g, "")
+        .slice(0, 180);
+}
 
-export default mongoose.model("Product", productSchema);
+ProductSchema.pre("save", function (next) {
+    if (!this.slug && this.title) {
+        this.slug = `${toSlug(this.title)}-${Date.now().toString(36)}`;
+    }
+    next();
+});
+
+ProductSchema.index({ title: "text", description: "text", tags: "text" });
+
+export default mongoose.model("Product", ProductSchema);

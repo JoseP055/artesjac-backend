@@ -1,192 +1,220 @@
+// src/routes/products.routes.js
 import { Router } from "express";
+import { body, param, query, validationResult } from "express-validator";
 import mongoose from "mongoose";
 import Product from "../models/Product.js";
-import { requireAuth, requireSellerOrAdmin } from "../middlewares/requireAuth.js";
+import { requireAuth, requireRole } from "../middlewares/requireAuth.js";
 
 const router = Router();
-const { isValidObjectId, Types } = mongoose;
 
-// Utils
-const toSlug = (str) =>
-  String(str || "")
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
+/* Helpers */
+const isAdmin = (req) => req.user?.role === "admin";
+const ownerFilter = (req) => (isAdmin(req) ? {} : { vendorId: req.user.id });
 
-const toNum = (v, fallback = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
-const cleanImages = (arr) =>
-  (Array.isArray(arr) ? arr : [])
-    .map(i => ({ url: String(i?.url || "").trim(), alt: String(i?.alt || "").trim() }))
-    .filter(i => i.url);
-const splitTags = (s) =>
-  (Array.isArray(s) ? s : String(s || "").split(","))
-    .map(t => String(t).trim()).filter(Boolean);
+function normalizeStatusForSchema(input) {
+  // UI puede mandar "inactive" o "out_of_stock"
+  if (input === "inactive") return "draft";
+  if (input === "out_of_stock") return "active";
+  if (["draft", "active", "archived"].includes(input)) return input;
+  return "active";
+}
 
-/** GET /api/products
- * Query: q, category, featured=true, minPrice, maxPrice, sort, page, limit, active
- */
-router.get("/", async (req, res) => {
-  try {
-    const { q, category, featured, minPrice, maxPrice, sort = "-createdAt", page = 1, limit = 12, active } = req.query;
-    const filter = {};
+/* Validaciones */
+const productCreateValidators = [
+  body("title").isString().trim().isLength({ min: 1, max: 140 }),
+  body("price").isFloat({ min: 0 }),
+  body("stock").optional().isInt({ min: 0 }),
+  body("description").optional().isString().isLength({ max: 2000 }),
+  body("images").optional().isArray(),
+  body("category").optional().isString().trim().isLength({ max: 60 }),
+  body("tags").optional().isArray(),
+  body("status").optional().isString(),
+];
 
-    if (active !== "all") filter.isActive = active === "false" ? false : true;
-    if (q) filter.$text = { $search: q };
-    if (category) filter.category = String(category).toLowerCase();
-    if (featured === "true") filter.isFeatured = true;
+const productUpdateValidators = [
+  body("title").optional().isString().trim().isLength({ min: 1, max: 140 }),
+  body("price").optional().isFloat({ min: 0 }),
+  body("stock").optional().isInt({ min: 0 }),
+  body("description").optional().isString().isLength({ max: 2000 }),
+  body("images").optional().isArray(),
+  body("category").optional().isString().trim().isLength({ max: 60 }),
+  body("tags").optional().isArray(),
+  body("status").optional().isString(),
+];
 
-    if (minPrice || maxPrice) {
-      filter.price = {};
-      if (minPrice) filter.price.$gte = Number(minPrice);
-      if (maxPrice) filter.price.$lte = Number(maxPrice);
-    }
-
-    const skip = (Number(page) - 1) * Number(limit);
-    const [items, total] = await Promise.all([
-      Product.find(filter).sort(String(sort)).skip(skip).limit(Number(limit)),
-      Product.countDocuments(filter),
-    ]);
-
-    return res.json({ ok: true, page: Number(page), limit: Number(limit), total, items });
-  } catch (e) {
-    console.error("❌ PRODUCTS LIST ERROR:", {
-      name: e?.name,
-      code: e?.code,
-      message: e?.message,
-      errors: e?.errors,
-    });
-    return res.status(400).json({ ok: false, error: e?.message || "Error listando productos" });
-  }
-});
-
-/** GET /api/products/:slug */
-router.get("/:slug", async (req, res) => {
-  try {
-    const product = await Product.findOne({ slug: req.params.slug });
-    if (!product) return res.status(404).json({ ok: false, error: "Producto no encontrado" });
-    return res.json({ ok: true, product });
-  } catch (e) {
-    console.error("❌ PRODUCT GET ERROR:", {
-      name: e?.name,
-      code: e?.code,
-      message: e?.message,
-      errors: e?.errors,
-    });
-    return res.status(400).json({ ok: false, error: e?.message || "Error obteniendo producto" });
-  }
-});
-
-/** POST /api/products — seller | admin */
-router.post("/", requireAuth, requireSellerOrAdmin, async (req, res) => {
-  try {
-    const b = req.body || {};
-    const rawArtist = req.user.role === "seller" ? req.user.id : (b.artistId || req.user.id);
-    if (!isValidObjectId(rawArtist)) {
-      return res.status(400).json({ ok: false, error: "artistId inválido" });
-    }
-
-    const payload = {
-      name: String(b.name || "").trim(),
-      description: String(b.description || ""),
-      price: toNum(b.price),
-      stock: toNum(b.stock),
-      images: cleanImages(b.images),
-      category: String(b.category || "").toLowerCase().trim(),
-      categoryName: String(b.categoryName || b.category || ""),
-      tags: splitTags(b.tags),
-      artistId: new Types.ObjectId(rawArtist),
-      isActive: Boolean(b.isActive ?? true),
-      isFeatured: Boolean(b.isFeatured ?? false),
-      slug: b.slug ? toSlug(b.slug) : toSlug(b.name),
-    };
-
-    if (!payload.name || !payload.category || payload.price == null || payload.stock == null) {
-      return res.status(400).json({ ok: false, error: "name, price, stock y category son requeridos" });
-    }
-
-    const exists = await Product.findOne({ slug: payload.slug });
-    if (exists) return res.status(409).json({ ok: false, error: "Slug ya existe" });
-
-    const product = await Product.create(payload);
-    return res.status(201).json({ ok: true, product });
-  } catch (e) {
-    console.error("❌ PRODUCT CREATE VALIDATION:", {
-      name: e?.name,
-      code: e?.code,
-      message: e?.message,
-      errors: e?.errors,
-      keyValue: e?.keyValue,
-      path: e?.path,
-      value: e?.value,
-    });
-    if (e?.code === 11000) return res.status(409).json({ ok: false, error: "Duplicado (slug/email único)" });
-    return res.status(400).json({ ok: false, error: e?.message || "Document failed validation" });
-  }
-});
-
-/** PUT /api/products/:id — seller | admin (seller solo sus productos) */
-router.put("/:id", requireAuth, requireSellerOrAdmin, async (req, res) => {
-  try {
-    const updates = { ...req.body };
-    if (updates.name && !updates.slug) updates.slug = toSlug(updates.name);
-    if (updates.slug) updates.slug = toSlug(updates.slug);
-    if (updates.price !== undefined) updates.price = toNum(updates.price);
-    if (updates.stock !== undefined) updates.stock = toNum(updates.stock);
-    if (updates.category) updates.category = String(updates.category).toLowerCase().trim();
-    if (updates.images) updates.images = cleanImages(updates.images);
-    if (updates.tags) updates.tags = splitTags(updates.tags);
-    if (updates.artistId) {
-      if (!isValidObjectId(updates.artistId)) {
-        return res.status(400).json({ ok: false, error: "artistId inválido" });
+/* Crear producto */
+router.post(
+  "/",
+  requireAuth,
+  requireRole(["seller", "vendor", "admin"]),
+  productCreateValidators,
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "Datos inválidos", details: errors.array() });
       }
-      updates.artistId = new Types.ObjectId(updates.artistId);
+
+      // vendorId: admin puede asignar; seller/vendor se fuerza al propio id
+      const rawVendorId = isAdmin(req) && req.body.vendorId ? req.body.vendorId : req.user.id;
+      if (!mongoose.Types.ObjectId.isValid(rawVendorId)) {
+        return res.status(400).json({ ok: false, error: "vendorId inválido" });
+      }
+
+      const reqStatus = req.body.status;
+      const normalizedStatus = normalizeStatusForSchema(reqStatus);
+      const forceOutOfStock = reqStatus === "out_of_stock";
+
+      const payload = {
+        title: String(req.body.title).trim(),
+        description: (req.body.description || "").toString(),
+        price: Number(req.body.price),
+        stock: Number(req.body.stock || 0),
+        category: (req.body.category || "").toString().trim(),
+        tags: Array.isArray(req.body.tags) ? req.body.tags : [],
+        images: Array.isArray(req.body.images) ? req.body.images : [],
+        status: normalizedStatus, // "draft" | "active" | "archived"
+        vendorId: rawVendorId,
+      };
+
+      if (forceOutOfStock) payload.stock = 0;
+
+      const product = await Product.create(payload);
+      res.status(201).json({ ok: true, data: product });
+    } catch (err) {
+      next(err);
     }
-
-    const findFilter = { _id: req.params.id };
-    if (req.user.role === "seller") findFilter.artistId = req.user.id;
-
-    const product = await Product.findOneAndUpdate(findFilter, updates, { new: true, runValidators: true });
-    if (!product) return res.status(404).json({ ok: false, error: "Producto no encontrado o sin permiso" });
-
-    return res.json({ ok: true, product });
-  } catch (e) {
-    console.error("❌ PRODUCT UPDATE VALIDATION:", {
-      name: e?.name,
-      code: e?.code,
-      message: e?.message,
-      errors: e?.errors,
-      keyValue: e?.keyValue,
-      path: e?.path,
-      value: e?.value,
-    });
-    if (e?.code === 11000) return res.status(409).json({ ok: false, error: "Duplicado (slug/email único)" });
-    return res.status(400).json({ ok: false, error: e?.message || "Document failed validation" });
   }
-});
+);
 
-/** DELETE /api/products/:id — seller | admin (seller solo sus productos) */
-router.delete("/:id", requireAuth, requireSellerOrAdmin, async (req, res) => {
-  try {
-    const findFilter = { _id: req.params.id };
-    if (req.user.role === "seller") findFilter.artistId = req.user.id;
+/* Listar productos */
+router.get(
+  "/",
+  requireAuth,
+  requireRole(["seller", "vendor", "admin"]),
+  [
+    query("page").optional().isInt({ min: 1 }),
+    query("limit").optional().isInt({ min: 1, max: 100 }),
+    query("q").optional().isString(),
+    query("category").optional().isString(),
+    query("status").optional().isString(),
+    query("sort")
+      .optional()
+      .isIn(["new", "old", "price_asc", "price_desc", "stock_desc", "stock_asc"]),
+  ],
+  async (req, res, next) => {
+    try {
+      const { page = 1, limit = 10, q, category, status, sort = "new" } = req.query;
 
-    const del = await Product.findOneAndDelete(findFilter);
-    if (!del) return res.status(404).json({ ok: false, error: "Producto no encontrado o sin permiso" });
+      const filter = { ...ownerFilter(req) };
+      if (q) filter.$text = { $search: String(q) };
+      if (category) filter.category = String(category);
+      if (status) filter.status = normalizeStatusForSchema(String(status));
 
-    return res.json({ ok: true, msg: "Eliminado" });
-  } catch (e) {
-    console.error("❌ PRODUCT DELETE ERROR:", {
-      name: e?.name,
-      code: e?.code,
-      message: e?.message,
-      errors: e?.errors,
-    });
-    return res.status(400).json({ ok: false, error: e?.message || "Error eliminando producto" });
+      let sortBy = { createdAt: -1 };
+      if (sort === "old") sortBy = { createdAt: 1 };
+      if (sort === "price_asc") sortBy = { price: 1 };
+      if (sort === "price_desc") sortBy = { price: -1 };
+      if (sort === "stock_desc") sortBy = { stock: -1 };
+      if (sort === "stock_asc") sortBy = { stock: 1 };
+
+      const data = await Product.find(filter)
+        .sort(sortBy)
+        .skip((Number(page) - 1) * Number(limit))
+        .limit(Number(limit));
+
+      const total = await Product.countDocuments(filter);
+      res.json({ ok: true, data, total, page: Number(page), limit: Number(limit) });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
+
+/* Obtener por ID */
+router.get(
+  "/:id",
+  requireAuth,
+  requireRole(["seller", "vendor", "admin"]),
+  [param("id").isMongoId()],
+  async (req, res, next) => {
+    try {
+      const product = await Product.findOne({ _id: req.params.id, ...ownerFilter(req) });
+      if (!product) return res.status(404).json({ ok: false, error: "No encontrado" });
+      res.json({ ok: true, data: product });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/* Actualizar */
+router.put(
+  "/:id",
+  requireAuth,
+  requireRole(["seller", "vendor", "admin"]),
+  [param("id").isMongoId(), ...productUpdateValidators],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "Datos inválidos", details: errors.array() });
+      }
+
+      const query = { _id: req.params.id, ...ownerFilter(req) };
+      const update = {};
+
+      if (req.body.title !== undefined) update.title = String(req.body.title).trim();
+      if (req.body.description !== undefined)
+        update.description = String(req.body.description || "");
+      if (req.body.price !== undefined) update.price = Number(req.body.price);
+      if (req.body.stock !== undefined) update.stock = Number(req.body.stock);
+      if (req.body.category !== undefined)
+        update.category = String(req.body.category || "").trim();
+      if (req.body.tags !== undefined) update.tags = Array.isArray(req.body.tags) ? req.body.tags : [];
+      if (req.body.images !== undefined)
+        update.images = Array.isArray(req.body.images) ? req.body.images : [];
+
+      if (req.body.status !== undefined) {
+        const reqStatus = req.body.status;
+        update.status = normalizeStatusForSchema(reqStatus);
+        if (reqStatus === "out_of_stock") {
+          update.stock = 0; // representar "sin stock" en el schema actual
+        }
+      }
+
+      const product = await Product.findOneAndUpdate(query, update, {
+        new: true,
+        runValidators: true,
+      });
+      if (!product) return res.status(404).json({ ok: false, error: "No encontrado o sin permiso" });
+      res.json({ ok: true, data: product });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/* Eliminar */
+router.delete(
+  "/:id",
+  requireAuth,
+  requireRole(["seller", "vendor", "admin"]),
+  [param("id").isMongoId()],
+  async (req, res, next) => {
+    try {
+      const query = { _id: req.params.id, ...ownerFilter(req) };
+      const product = await Product.findOneAndDelete(query);
+      if (!product) return res.status(404).json({ ok: false, error: "No encontrado o sin permiso" });
+      res.json({ ok: true, data: { _id: product._id } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 export default router;
