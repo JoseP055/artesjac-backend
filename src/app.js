@@ -14,6 +14,9 @@ import analyticsRoutes from "./routes/analytics.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import buyerRoutes from "./routes/buyer.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
+import authPasswordRoutes from "./routes/auth.password.routes.js";
+import buyerOrderRoutes from "./routes/buyer.orders.routes.js";
+
 
 
 
@@ -41,6 +44,9 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/buyer", buyerRoutes);
 app.use("/api/profile", profileRoutes);
+app.use("/api/auth", authPasswordRoutes);
+app.use("/api/buyer-orders", buyerOrderRoutes);
+
 
 // 404 controlado (AL FINAL)
 app.use((req, res) => {
