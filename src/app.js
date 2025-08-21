@@ -18,7 +18,7 @@ import authPasswordRoutes from "./routes/auth.password.routes.js";
 import buyerOrderRoutes from "./routes/buyer.orders.routes.js";
 import shopPublicRoutes from "./routes/shop.public.routes.js";
 
-import path from "path";
+
 
 
 
@@ -33,13 +33,6 @@ app.use(express.json());
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 
-// ✅ SIRVE /uploads como estático
-const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
-app.use("/uploads", express.static(UPLOADS_DIR, {
-    fallthrough: true,
-    maxAge: "7d",
-    setHeaders: (res) => res.setHeader("Cache-Control", "public, max-age=604800")
-}));
 
 
 // Healthchecks
