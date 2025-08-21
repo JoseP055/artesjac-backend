@@ -18,7 +18,7 @@ import authPasswordRoutes from "./routes/auth.password.routes.js";
 import buyerOrderRoutes from "./routes/buyer.orders.routes.js";
 import shopPublicRoutes from "./routes/shop.public.routes.js";
 import publicRoutes from "./routes/public.routes.js";
-
+import reviewsRoutes from "./routes/reviews.routes.js";
 
 
 
@@ -53,7 +53,7 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/auth", authPasswordRoutes);
 app.use("/api/buyer-orders", buyerOrderRoutes);
 app.use("/api/shop", publicRoutes);
-
+app.use("/api/reviews", reviewsRoutes);
 
 
 
