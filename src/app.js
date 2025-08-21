@@ -16,6 +16,9 @@ import buyerRoutes from "./routes/buyer.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
 import authPasswordRoutes from "./routes/auth.password.routes.js";
 import buyerOrderRoutes from "./routes/buyer.orders.routes.js";
+import shopPublicRoutes from "./routes/shop.public.routes.js";
+
+import path from "path";
 
 
 
@@ -29,6 +32,16 @@ app.use(compression());
 app.use(express.json());
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
+
+// ✅ SIRVE /uploads como estático
+const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+app.use("/uploads", express.static(UPLOADS_DIR, {
+    fallthrough: true,
+    maxAge: "7d",
+    setHeaders: (res) => res.setHeader("Cache-Control", "public, max-age=604800")
+}));
+
+
 // Healthchecks
 app.get("/", (_req, res) => res.send("🚀 ArtesJAC API funcionando"));
 app.get("/api/health", (_req, res) =>
@@ -38,7 +51,7 @@ app.get("/api/health", (_req, res) =>
 // 🔗 Rutas de negocio (montar solo una vez)
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
-app.use("/api/store-profile", storeProfileRoutes); 
+app.use("/api/store-profile", storeProfileRoutes);
 app.use("/api/orders", ordersRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
@@ -46,7 +59,7 @@ app.use("/api/buyer", buyerRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/auth", authPasswordRoutes);
 app.use("/api/buyer-orders", buyerOrderRoutes);
-
+app.use("/api/shop", shopPublicRoutes);
 
 // 404 controlado (AL FINAL)
 app.use((req, res) => {
