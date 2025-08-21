@@ -8,7 +8,14 @@ import morgan from "morgan";
 // Rutas
 import authRoutes from "./routes/auth.routes.js";
 import productRoutes from "./routes/products.routes.js";
-import storeProfileRoutes from "./routes/storeProfile.routes.js"; // 👈 asegurate que el archivo exista
+import storeProfileRoutes from "./routes/storeProfile.routes.js";
+import ordersRoutes from "./routes/orders.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
+import dashboardRoutes from "./routes/dashboard.routes.js";
+import buyerRoutes from "./routes/buyer.routes.js";
+import profileRoutes from "./routes/profile.routes.js";
+
+
 
 const app = express(); // ✅ crear la app ANTES de usar app.use
 
@@ -29,6 +36,11 @@ app.get("/api/health", (_req, res) =>
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/store-profile", storeProfileRoutes); 
+app.use("/api/orders", ordersRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/buyer", buyerRoutes);
+app.use("/api/profile", profileRoutes);
 
 // 404 controlado (AL FINAL)
 app.use((req, res) => {
