@@ -17,7 +17,7 @@ import profileRoutes from "./routes/profile.routes.js";
 import authPasswordRoutes from "./routes/auth.password.routes.js";
 import buyerOrderRoutes from "./routes/buyer.orders.routes.js";
 import shopPublicRoutes from "./routes/shop.public.routes.js";
-
+import publicRoutes from "./routes/public.routes.js";
 
 
 
@@ -43,7 +43,7 @@ app.get("/api/health", (_req, res) =>
 
 // 🔗 Rutas de negocio (montar solo una vez)
 app.use("/api/auth", authRoutes);
-app.use("/api/products", productRoutes);
+app.use("/api", productRoutes);
 app.use("/api/store-profile", storeProfileRoutes);
 app.use("/api/orders", ordersRoutes);
 app.use("/api/analytics", analyticsRoutes);
@@ -52,7 +52,11 @@ app.use("/api/buyer", buyerRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/auth", authPasswordRoutes);
 app.use("/api/buyer-orders", buyerOrderRoutes);
-app.use("/api/shop", shopPublicRoutes);
+app.use("/api/shop", publicRoutes);
+
+
+
+
 
 // 404 controlado (AL FINAL)
 app.use((req, res) => {
