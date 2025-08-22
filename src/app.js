@@ -20,7 +20,8 @@ import shopPublicRoutes from "./routes/shop.public.routes.js";
 import publicRoutes from "./routes/public.routes.js";
 import reviewsRoutes from "./routes/reviews.routes.js";
 import cartRoutes from "./routes/cart.routes.js";
-
+import sellerOrdersRoutes from "./routes/seller.orders.routes.js";
+import sellerAnalyticsRoutes from "./routes/seller.analytics.routes.js";
 
 
 
@@ -57,6 +58,8 @@ app.use("/api/buyer-orders", buyerOrderRoutes);
 app.use("/api/shop", publicRoutes);
 app.use("/api/reviews", reviewsRoutes);
 app.use("/api/cart", cartRoutes);
+app.use("/api/seller-orders", sellerOrdersRoutes);
+app.use("/api/seller-analytics", sellerAnalyticsRoutes);
 
 
 

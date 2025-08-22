@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import requireAuth from "../middlewares/requireAuth.js";
 import BuyerOrder from "../models/BuyerOrder.js";
 import Product from "../models/Product.js";
+import PedidosSyncService from "../services/pedidosSync.service.js";
 
 const router = Router();
 
@@ -15,46 +16,30 @@ router.post("/", requireAuth, async (req, res, next) => {
     try {
         const { customer, payment, items, subtotal, shipping, total } = req.body;
 
-        console.log('📥 Datos recibidos para crear pedido:', {
-            customer: customer?.fullName,
-            itemsCount: items?.length,
-            total
-        });
-
-        // Validaciones básicas
         if (!customer || !payment || !items || !Array.isArray(items) || items.length === 0) {
-            return res.status(400).json({
-                ok: false,
-                error: "Datos incompletos del pedido"
-            });
+            return res.status(400).json({ ok: false, error: "Datos incompletos del pedido" });
         }
 
         const buyerId = new mongoose.Types.ObjectId(req.user.id);
 
-        // Generar código único para el pedido
+        // Generar código único
         const orderCode = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
-        console.log('🆔 Código de pedido generado:', orderCode);
 
-        // Procesar items y obtener información de productos
+        // Procesar items
         const processedItems = [];
         for (const item of items) {
             try {
-                // Buscar el producto para obtener información adicional
                 const product = await Product.findById(item.id).lean();
 
                 processedItems.push({
                     productId: item.id ? new mongoose.Types.ObjectId(item.id) : null,
-                    // Usar vendorId del producto (tu campo correcto)
                     sellerId: product?.vendorId ? new mongoose.Types.ObjectId(product.vendorId) : null,
                     name: item.name || product?.title || 'Producto',
                     price: Number(item.numericPrice || item.price || product?.price || 0),
                     quantity: Number(item.quantity || 1),
                     category: item.category || product?.category || 'general'
                 });
-                console.log('✅ Producto procesado:', item.name, 'Vendedor:', product?.vendorId);
             } catch (error) {
-                console.log('⚠️ Error al procesar producto:', item.id, error.message);
-                // Si no se encuentra el producto, usamos los datos del item
                 processedItems.push({
                     productId: item.id ? new mongoose.Types.ObjectId(item.id) : null,
                     sellerId: null,
@@ -66,7 +51,7 @@ router.post("/", requireAuth, async (req, res, next) => {
             }
         }
 
-        // Procesar datos de pago
+        // Procesar pago
         const processedPayment = {
             method: payment.method,
             subtotal: Number(subtotal) || 0,
@@ -84,20 +69,11 @@ router.post("/", requireAuth, async (req, res, next) => {
             processedPayment.bankName = payment.bankTransfer.bank || '';
         }
 
-        // Crear el pedido con código explícito
+        // Crear el pedido
         const orderData = {
-            code: orderCode, // ⭐ Código explícito
+            code: orderCode,
             buyerId,
-            customer: {
-                fullName: customer.fullName,
-                email: customer.email,
-                phone: customer.phone,
-                address: customer.address,
-                city: customer.city,
-                province: customer.province,
-                postalCode: customer.postalCode || '',
-                specialInstructions: customer.specialInstructions || ''
-            },
+            customer,
             items: processedItems,
             payment: processedPayment,
             shipping: {
@@ -110,12 +86,15 @@ router.post("/", requireAuth, async (req, res, next) => {
             status: "confirmado"
         };
 
-        console.log('💾 Creando pedido con código:', orderCode);
-
         const newOrder = new BuyerOrder(orderData);
         const savedOrder = await newOrder.save();
 
-        console.log('✅ Pedido creado exitosamente:', savedOrder.code);
+        // Sincronizar con vendors
+        try {
+            await PedidosSyncService.syncBuyerOrderToVendors(savedOrder._id);
+        } catch (syncError) {
+            console.error('⚠️ Error en sincronización (no crítico):', syncError);
+        }
 
         res.status(201).json({
             ok: true,
@@ -173,7 +152,6 @@ router.get("/:code", requireAuth, async (req, res, next) => {
         const { code } = req.params;
         const buyerId = new mongoose.Types.ObjectId(req.user.id);
 
-        // Buscar por código o por ID
         const query = code.startsWith('ORD-')
             ? { code: code, buyerId }
             : mongoose.isValidObjectId(code)
@@ -186,7 +164,6 @@ router.get("/:code", requireAuth, async (req, res, next) => {
             return res.status(404).json({ ok: false, error: "Pedido no encontrado" });
         }
 
-        // Obtener información adicional de productos y vendedores
         const enrichedItems = [];
         for (const item of order.items) {
             try {
@@ -203,9 +180,7 @@ router.get("/:code", requireAuth, async (req, res, next) => {
                     productDetails: product,
                     sellerDetails: seller
                 });
-                console.log('✅ Item enriquecido:', item.name, 'Vendedor encontrado:', !!seller);
             } catch (error) {
-                console.log('⚠️ Error al obtener detalles del producto:', item.productId);
                 enrichedItems.push({
                     ...item,
                     productDetails: null,
