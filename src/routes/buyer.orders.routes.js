@@ -3,8 +3,136 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import requireAuth from "../middlewares/requireAuth.js";
 import BuyerOrder from "../models/BuyerOrder.js";
+import Product from "../models/Product.js";
 
 const router = Router();
+
+/**
+ * POST /api/buyer-orders
+ * Crea un nuevo pedido desde el checkout
+ */
+router.post("/", requireAuth, async (req, res, next) => {
+    try {
+        const { customer, payment, items, subtotal, shipping, total } = req.body;
+
+        console.log('📥 Datos recibidos para crear pedido:', {
+            customer: customer?.fullName,
+            itemsCount: items?.length,
+            total
+        });
+
+        // Validaciones básicas
+        if (!customer || !payment || !items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                ok: false,
+                error: "Datos incompletos del pedido"
+            });
+        }
+
+        const buyerId = new mongoose.Types.ObjectId(req.user.id);
+
+        // Generar código único para el pedido
+        const orderCode = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+        console.log('🆔 Código de pedido generado:', orderCode);
+
+        // Procesar items y obtener información de productos
+        const processedItems = [];
+        for (const item of items) {
+            try {
+                // Buscar el producto para obtener información adicional
+                const product = await Product.findById(item.id).lean();
+
+                processedItems.push({
+                    productId: item.id ? new mongoose.Types.ObjectId(item.id) : null,
+                    // Usar vendorId del producto (tu campo correcto)
+                    sellerId: product?.vendorId ? new mongoose.Types.ObjectId(product.vendorId) : null,
+                    name: item.name || product?.title || 'Producto',
+                    price: Number(item.numericPrice || item.price || product?.price || 0),
+                    quantity: Number(item.quantity || 1),
+                    category: item.category || product?.category || 'general'
+                });
+                console.log('✅ Producto procesado:', item.name, 'Vendedor:', product?.vendorId);
+            } catch (error) {
+                console.log('⚠️ Error al procesar producto:', item.id, error.message);
+                // Si no se encuentra el producto, usamos los datos del item
+                processedItems.push({
+                    productId: item.id ? new mongoose.Types.ObjectId(item.id) : null,
+                    sellerId: null,
+                    name: item.name || 'Producto',
+                    price: Number(item.numericPrice || item.price || 0),
+                    quantity: Number(item.quantity || 1),
+                    category: item.category || 'general'
+                });
+            }
+        }
+
+        // Procesar datos de pago
+        const processedPayment = {
+            method: payment.method,
+            subtotal: Number(subtotal) || 0,
+            shipping: Number(shipping) || 0,
+            total: Number(total) || 0,
+        };
+
+        if (payment.method === 'card' && payment.cardNumber) {
+            const cardDigits = payment.cardNumber.replace(/\s+/g, '');
+            processedPayment.cardLast4 = cardDigits.slice(-4);
+            processedPayment.cardName = payment.cardName || '';
+        }
+
+        if (payment.method === 'bank_transfer' && payment.bankTransfer) {
+            processedPayment.bankName = payment.bankTransfer.bank || '';
+        }
+
+        // Crear el pedido con código explícito
+        const orderData = {
+            code: orderCode, // ⭐ Código explícito
+            buyerId,
+            customer: {
+                fullName: customer.fullName,
+                email: customer.email,
+                phone: customer.phone,
+                address: customer.address,
+                city: customer.city,
+                province: customer.province,
+                postalCode: customer.postalCode || '',
+                specialInstructions: customer.specialInstructions || ''
+            },
+            items: processedItems,
+            payment: processedPayment,
+            shipping: {
+                address: `${customer.address}, ${customer.city}, ${customer.province}`,
+                method: "Envío estándar",
+                estimatedDelivery: "3-5 días hábiles",
+                cost: Number(shipping) || 0
+            },
+            total: Number(total) || 0,
+            status: "confirmado"
+        };
+
+        console.log('💾 Creando pedido con código:', orderCode);
+
+        const newOrder = new BuyerOrder(orderData);
+        const savedOrder = await newOrder.save();
+
+        console.log('✅ Pedido creado exitosamente:', savedOrder.code);
+
+        res.status(201).json({
+            ok: true,
+            order: {
+                id: savedOrder._id.toString(),
+                code: savedOrder.code,
+                status: savedOrder.status,
+                total: savedOrder.total,
+                createdAt: savedOrder.createdAt
+            }
+        });
+
+    } catch (err) {
+        console.error('💥 Error creating order:', err);
+        next(err);
+    }
+});
 
 /**
  * GET /api/buyer-orders
@@ -37,84 +165,71 @@ router.get("/", requireAuth, async (req, res, next) => {
 });
 
 /**
- * GET /api/buyer-orders/:id
- * Devuelve el detalle de un pedido del comprador autenticado
+ * GET /api/buyer-orders/:code
+ * Devuelve el detalle completo de un pedido por código
  */
-router.get("/:id", requireAuth, async (req, res, next) => {
+router.get("/:code", requireAuth, async (req, res, next) => {
     try {
-        const { id } = req.params;
-        if (!mongoose.isValidObjectId(id)) {
-            return res.status(400).json({ ok: false, error: "ID inválido" });
+        const { code } = req.params;
+        const buyerId = new mongoose.Types.ObjectId(req.user.id);
+
+        // Buscar por código o por ID
+        const query = code.startsWith('ORD-')
+            ? { code: code, buyerId }
+            : mongoose.isValidObjectId(code)
+                ? { _id: code, buyerId }
+                : { code: code, buyerId };
+
+        const order = await BuyerOrder.findOne(query).lean();
+
+        if (!order) {
+            return res.status(404).json({ ok: false, error: "Pedido no encontrado" });
         }
 
-        const buyerId = new mongoose.Types.ObjectId(req.user.id);
-        const o = await BuyerOrder.findOne({ _id: id, buyerId }).lean();
+        // Obtener información adicional de productos y vendedores
+        const enrichedItems = [];
+        for (const item of order.items) {
+            try {
+                const product = await Product.findById(item.productId).lean();
+                let seller = null;
 
-        if (!o) return res.status(404).json({ ok: false, error: "Pedido no encontrado" });
+                if (item.sellerId) {
+                    const User = mongoose.model('User');
+                    seller = await User.findById(item.sellerId).select('name email').lean();
+                }
+
+                enrichedItems.push({
+                    ...item,
+                    productDetails: product,
+                    sellerDetails: seller
+                });
+                console.log('✅ Item enriquecido:', item.name, 'Vendedor encontrado:', !!seller);
+            } catch (error) {
+                console.log('⚠️ Error al obtener detalles del producto:', item.productId);
+                enrichedItems.push({
+                    ...item,
+                    productDetails: null,
+                    sellerDetails: null
+                });
+            }
+        }
 
         res.json({
             ok: true,
             data: {
-                _id: o._id.toString(),
-                code: o.code,
-                date: o.createdAt,
-                status: o.status,
-                total: o.total,
-                items: (o.items || []).map((it) => ({
-                    name: it.name,
-                    quantity: it.quantity,
-                    price: it.price,
-                })),
-                shipping: o.shipping || {},
-            },
+                _id: order._id.toString(),
+                code: order.code,
+                date: order.createdAt,
+                status: order.status,
+                customer: order.customer,
+                items: enrichedItems,
+                payment: order.payment,
+                shipping: order.shipping,
+                total: order.total,
+                createdAt: order.createdAt,
+                updatedAt: order.updatedAt
+            }
         });
-    } catch (err) {
-        next(err);
-    }
-});
-
-/**
- * POST /api/buyer-orders/dev-seed
- * Crea pedidos de ejemplo para el usuario logueado (SOLO en desarrollo)
- */
-router.post("/dev-seed", requireAuth, async (req, res, next) => {
-    try {
-        if (process.env.NODE_ENV === "production") {
-            return res.status(403).json({ ok: false, error: "No permitido en producción" });
-        }
-
-        const buyerId = new mongoose.Types.ObjectId(req.user.id);
-
-        const seed = [
-            {
-                buyerId,
-                items: [
-                    { name: "Collar artesanal de semillas", quantity: 1, price: 12000 },
-                    { name: "Bolso tejido a mano", quantity: 1, price: 18500 },
-                ],
-                total: 30500,
-                status: "entregado",
-                shipping: {
-                    address: "Desamparados, San José, Costa Rica",
-                    method: "Envío estándar",
-                    tracking: "CR123456789",
-                },
-            },
-            {
-                buyerId,
-                items: [{ name: "Cuadro colorido abstracto", quantity: 1, price: 22000 }],
-                total: 22000,
-                status: "enviado",
-                shipping: {
-                    address: "Desamparados, San José, Costa Rica",
-                    method: "Envío express",
-                    tracking: "CR123456790",
-                },
-            },
-        ];
-
-        const created = await BuyerOrder.insertMany(seed);
-        res.json({ ok: true, created: created.map((c) => c._id.toString()) });
     } catch (err) {
         next(err);
     }
